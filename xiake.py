@@ -4,6 +4,7 @@ import csv
 import json
 from datetime import datetime, timedelta
 
+# 注册服务，默认不启用
 sv_event = Service('pcr-reminder-event', enable_on_default=False, help_='活动结束提醒', bundle='pcr订阅')
 sv_gacha = Service('pcr-reminder-gacha', enable_on_default=False, help_='卡池结束提醒', bundle='pcr订阅')
 
@@ -25,11 +26,13 @@ def is_last_day_with_hour(item, today, hour):
     return last_day.day == today.day and last_day.month == today.month and today.hour == hour
 
 
+# 提前3小时提醒活动
 def should_event_be_reminded_now(item, today):
     warn_hours = 3
     return is_hour_before(item, today, warn_hours)
 
 
+# 提前一天晚8点、提前2小时，两次提醒卡池补井
 def should_gacha_be_reminded_now(item, today):
     warn_hours = 2
     # hour in day: range(24)=[0...23]
