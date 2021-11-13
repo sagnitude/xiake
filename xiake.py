@@ -1,7 +1,7 @@
 from hoshino.service import Service
-import asyncio
 import aiohttp
 import csv
+import json
 from datetime import datetime, timedelta
 
 sv_event = Service('pcr-reminder-event', enable_on_default=False, help_='活动结束提醒', bundle='pcr订阅')
@@ -51,21 +51,34 @@ async def pcr_reminder_event():
 async def pcr_reminder_gacha():
     gachas = await find_gacha_reminds()
     if gachas and len(gachas) > 0:
-        msg = f'以下卡池即将结束，请注意补井时间！\n'
-        for gacha in gachas:
-            msg += "\n结束时间：" + gacha.end_time
-            msg += "\n\t" + gacha.gacha_name
-            msg += "\n\t" + gacha.gacha_description
+        msg = f'[CQ:at,qq=all] 以下卡池即将结束，请注意补井时间！\n' + print_gacha_info(gachas)
         await sv_gacha.broadcast(msg, 'pcr-reminder-gacha', 0.2)
+
+
+@sv_gacha.on_prefix('列出当前卡池')
+async def list_gacha(bot, ev):
+    today = datetime.today()
+    gachas = await fetch_csv("gacha_data.csv")
+    gachas = [gacha for gacha in gachas if is_valid_gacha(gacha, today)]
+    if gachas and len(gachas) > 0:
+        await bot.send(ev, print_gacha_info(gachas))
+    else:
+        await bot.send(ev, '当前没有卡池')
+
+
+@sv_gacha.on_prefix('列出所有卡池')
+async def list_all_gacha(bot, ev):
+    gachas = await fetch_csv("gacha_data.csv")
+    if gachas and len(gachas) > 0:
+        await bot.send(ev, print_gacha_info(gachas))
+    else:
+        await bot.send(ev, '当前没有卡池')
 
 
 async def find_event_reminds():
     today = datetime.today()
     event_items = await fetch_csv("hatsune_schedule.csv")
     if event_items:
-        # for item in event_items:
-        #     if is_valid_event(item, today):
-        #         print(item.title)
         return [item for item in event_items if
                 is_valid_event(item, today) and should_event_be_reminded_now(item, today)]
 
@@ -74,14 +87,20 @@ async def find_gacha_reminds():
     today = datetime.today()
     gacha_items = await fetch_csv("gacha_data.csv")
     if gacha_items:
-        # for item in gacha_items:
-        #     if is_valid_gacha(item, today):
-        #         print(item.title)
         return [item for item in gacha_items if
                 is_valid_gacha(item, today) and should_gacha_be_reminded_now(item, today)]
 
 
-# 2020/08/18 11:00:00
+def print_gacha_info(gachas):
+    msg = ''
+    for gacha in gachas:
+        msg += "\n结束时间：" + gacha.end_time
+        msg += "\n\t" + gacha.gacha_name
+        msg += "\n\t" + gacha.description.replace('\\n', '\n\t')
+    return msg
+
+
+# 2099/01/01 11:00:00
 def parse_time(t):
     return datetime.strptime(t, "%Y/%m/%d %H:%M:%S")
 
@@ -92,7 +111,7 @@ def is_valid_gacha(item, today):
     # 50000 为FES卡池
     # 60000 为新手卡池
     # 70000 为三星必得卡池
-    return is_valid_item(item, today) and item.gacha_id >= "30000" and item.gacha_id <= "70000"
+    return is_valid_item(item, today) and "30000" <= item.gacha_id <= "70000" and item.end_time < "2099/01/01 11:00:00"
 
 
 def is_valid_event(item, today):
@@ -115,6 +134,10 @@ class CsvItem:
     def __init__(self, dictionary):
         for k, v in dictionary.items():
             setattr(self, k, v)
+
+    def toJSON(self):
+        return json.dumps(self, default=lambda o: o.__dict__,
+                          sort_keys=True, indent=4)
 
 
 async def fetch_csv(file_name):
