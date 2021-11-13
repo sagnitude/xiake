@@ -42,7 +42,7 @@ def should_gacha_be_reminded_now(item, today):
 async def pcr_reminder_event():
     events = await find_event_reminds()
     if events and len(events) > 0:
-        msg = '活动即将结束，记得清掉boss券兑换券'
+        msg = f'[CQ:at,qq=all] 活动即将结束，记得清掉boss券兑换券'
         await sv_event.broadcast(msg, 'pcr-reminder-event', 0.2)
 
 
