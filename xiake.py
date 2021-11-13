@@ -1,17 +1,129 @@
-from hoshino import Service
+from hoshino.service import Service
+import asyncio
+import aiohttp
+import csv
+from datetime import datetime, timedelta
 
-@sv.on_prefix("开启活动提醒")
-async def remind_enable_hatsune(bot, ev):
-    gid = str(ev['group_id'])
+sv_event = Service('pcr-reminder-event', enable_on_default=False, help_='活动结束提醒', bundle='pcr订阅')
+sv_gacha = Service('pcr-reminder-gacha', enable_on_default=False, help_='卡池结束提醒', bundle='pcr订阅')
 
-@sv.on_prefix("关闭活动提醒")
-async def remind_enable_hatsune(bot, ev):
-    gid = str(ev['group_id'])
+db_root_url = "https://raw.githubusercontent.com/ZQZ44/redive_db_diff/master/"
 
-@sv.on_prefix("开启卡池提醒")
-async def remind_enable_hatsune(bot, ev):
-    gid = str(ev['group_id'])
 
-@sv.on_prefix("关闭活动提醒")
-async def remind_enable_hatsune(bot, ev):
-    gid = str(ev['group_id'])
+def is_hour_before(item, today, hours):
+    seconds_start = (hours - 1) * 3600
+    seconds_end = hours * 3600
+    if not item.tillEnd:
+        item.tillEnd = (item.end_time - today).total_seconds()
+    return seconds_end > item.tillEnd >= seconds_start
+
+
+def is_last_day_with_hour(item, today, hour):
+    if not item.endTime:
+        item.endTime = parse_time(item.end_time)
+    last_day = item.endTime + timedelta(days=-1)
+    return last_day.day == today.day and last_day.month == today.month and today.hour == hour
+
+
+def should_event_be_reminded_now(item, today):
+    warn_hours = 3
+    return is_hour_before(item, today, warn_hours)
+
+
+def should_gacha_be_reminded_now(item, today):
+    warn_hours = 2
+    # hour in day: range(24)=[0...23]
+    last_day_hour = 20
+    return is_hour_before(item, today, warn_hours) or is_last_day_with_hour(item, today, last_day_hour)
+
+
+# 活动一般晚上12点结束，1. 提前3小时提醒
+@sv_event.scheduled_job('cron', hour='*', minute='2')
+async def pcr_reminder_event():
+    events = await find_event_reminds()
+    if events and len(events) > 0:
+        msg = '活动即将结束，记得清掉boss券兑换券'
+        await sv_event.broadcast(msg, 'pcr-reminder-event', 0.2)
+
+
+# 卡池一般上午11点结束， 1. 提前2小时提醒 2. 前一天的晚8点提醒
+@sv_gacha.scheduled_job('cron', hour='*', minute='2')
+async def pcr_reminder_gacha():
+    gachas = await find_gacha_reminds()
+    if gachas and len(gachas) > 0:
+        msg = f'以下卡池即将结束，请注意补井时间！\n'
+        for gacha in gachas:
+            msg += "\n结束时间：" + gacha.end_time
+            msg += "\n\t" + gacha.gacha_name
+            msg += "\n\t" + gacha.gacha_description
+        await sv_gacha.broadcast(msg, 'pcr-reminder-gacha', 0.2)
+
+
+async def find_event_reminds():
+    today = datetime.today()
+    event_items = await fetch_csv("hatsune_schedule.csv")
+    if event_items:
+        # for item in event_items:
+        #     if is_valid_event(item, today):
+        #         print(item.title)
+        return [item for item in event_items if
+                is_valid_event(item, today) and should_event_be_reminded_now(item, today)]
+
+
+async def find_gacha_reminds():
+    today = datetime.today()
+    gacha_items = await fetch_csv("gacha_data.csv")
+    if gacha_items:
+        # for item in gacha_items:
+        #     if is_valid_gacha(item, today):
+        #         print(item.title)
+        return [item for item in gacha_items if
+                is_valid_gacha(item, today) and should_gacha_be_reminded_now(item, today)]
+
+
+# 2020/08/18 11:00:00
+def parse_time(t):
+    return datetime.strptime(t, "%Y/%m/%d %H:%M:%S")
+
+
+def is_valid_gacha(item, today):
+    # 30000 为新角色卡池
+    # 40000 为季节和周年庆典卡池
+    # 50000 为FES卡池
+    # 60000 为新手卡池
+    # 70000 为三星必得卡池
+    return is_valid_item(item, today) and item.gacha_id >= "30000" and item.gacha_id <= "70000"
+
+
+def is_valid_event(item, today):
+    return is_valid_item(item, today)
+
+
+def is_valid_item(item, today):
+    if item:
+        item.startTime = start_time = parse_time(item.start_time)
+        item.endTime = end_time = parse_time(item.end_time)
+        seconds_since_start = (today - start_time).total_seconds()
+        seconds_till_end = (end_time - today).total_seconds()
+        item.sinceStart = seconds_since_start
+        item.tillEnd = seconds_till_end
+        if seconds_since_start > 0 and seconds_till_end >= 0:
+            return True
+
+
+class CsvItem:
+    def __init__(self, dictionary):
+        for k, v in dictionary.items():
+            setattr(self, k, v)
+
+
+async def fetch_csv(file_name):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(db_root_url + file_name) as resp:
+            data = await resp.text()
+            records = csv.DictReader(data.split("\n"))
+            items = [CsvItem(row) for row in records]
+            return items
+
+# loop = asyncio.get_event_loop()
+# loop.run_until_complete(find_event_reminds())
